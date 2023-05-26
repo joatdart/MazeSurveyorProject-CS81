@@ -21,7 +21,7 @@ DEFAULT_ODOM_2 = 'robot_1/odom'
 # Frequency at which the loop operates
 FREQUENCY = 10 # Hz.
 
-# Velocities 
+# Velocities
 LINEAR_VELOCITY = 0.2 # m/s
 ANGULAR_VELOCITY = 0.2 # rad/s
 
@@ -52,8 +52,8 @@ class PD():
     def __init__(self, kp, kd):
         self._p = kp # proportional gain
         self._d = kd # derivative gain
-        
-    ''' 
+
+    '''
     Compute new actuation
     If there is no prev error, curr_err = prev_err and d_t is zero so that the d term will not be accounted for.
     '''
@@ -78,9 +78,13 @@ class Grid:
     def update(self, x, y, value):
         self.grid[y][x] = value
 
-class Maze():
+class Robot():
     def __init__(self,
                  controller,
+                 cmd_vel_topic,
+                 scan_topic,
+                 odom_topic,
+                 robot_num,
                  goal_distance=GOAL_DISTANCE,
                  linear_velocity=LINEAR_VELOCITY,
                  angular_velocity=ANGULAR_VELOCITY,
@@ -90,56 +94,36 @@ class Maze():
                  map_height=MAP_HEIGHT,
                  map_resolution=MAP_RESOLUTION):
 
-        # Publisher/Subscriber
-        self._cmd_pub_1 = rospy.Publisher(DEFAULT_CMD_VEL_TOPIC_1, Twist, queue_size=1) # publisher to send velocity commands.
-        self._cmd_pub_2 = rospy.Publisher(DEFAULT_CMD_VEL_TOPIC_2, Twist, queue_size=1) # publisher to send velocity commands.
-
-        self._occupancy_grid_pub = rospy.Publisher('map', OccupancyGrid, queue_size=1) # publishes occupancy grid info
-        self._laser_sub_1 = rospy.Subscriber(DEFAULT_SCAN_TOPIC_1, LaserScan, self._laser_callback_1, queue_size=1) # subscriber receiving messages from the laser.
-        self._laser_sub_2 = rospy.Subscriber(DEFAULT_SCAN_TOPIC_2, LaserScan, self._laser_callback_2, queue_size=1) # subscriber receiving messages from the laser.
-
-        self._odom_sub_1 = rospy.Subscriber(DEFAULT_ODOM_1, Odometry, self._odom_callback_1, queue_size=1)
-        self._odom_sub_2 = rospy.Subscriber(DEFAULT_ODOM_2, Odometry, self._odom_callback_2, queue_size=1)
-
         # Parameters
-        self.linear_velocity_1 = linear_velocity
-        self.angular_velocity_1 = angular_velocity
+        self.linear_velocity = linear_velocity
+        self.angular_velocity = angular_velocity
         self.frequency = frequency
-        self.scan_angle_1 = scan_angle
-        self.goal_distance_1 = goal_distance
+        self.scan_angle = scan_angle
+        self.goal_distance = goal_distance
+        self.map_pub_topic = str('map' + robot_num)
 
-        self.linear_velocity_2 = linear_velocity
-        self.angular_velocity_2 = angular_velocity
-        self.scan_angle_2 = scan_angle
-        self.goal_distance_2 = goal_distance
+        # Publisher/Subscriber
+        self._cmd_pub = rospy.Publisher(cmd_vel_topic, Twist, queue_size=1) # publisher to send velocity commands.
+        self._occupancy_grid_pub = rospy.Publisher(self.map_pub_topic, OccupancyGrid, queue_size=1) # publishes occupancy grid info
+        self._laser_sub = rospy.Subscriber(scan_topic, LaserScan, self._laser_callback, queue_size=1) # subscriber receiving messages from the laser.
+        self._odom_sub = rospy.Subscriber(odom_topic, Odometry, self._odom_callback, queue_size=1)
 
         # Robot's state and controller
-        self._fsm_1 = fsm.WAITING_FOR_LASER
-        self.controller_1 = controller 
-
-        self._fsm_2 = fsm.WAITING_FOR_LASER
-        self.controller_2 = controller 
+        self._fsm = fsm.WAITING_FOR_LASER
+        self.controller = controller
 
         # Previous and current errors (distance to the wall)
-        self.prev_err_1 = None
-        self.curr_err_1 = None
-        self.prev_err_2 = None
-        self.curr_err_2 = None
+        self.prev_err = None
+        self.curr_err = None
 
         # Keep track of the time when prev and curr errors were computed (used to get d_t for the d term in PD controller)
-        self.prev_err_timestamp_1 = rospy.get_rostime()
-        self.curr_err_timestamp_1 = rospy.get_rostime()
-        self.prev_err_timestamp_2 = rospy.get_rostime()
-        self.curr_err_timestamp_2 = rospy.get_rostime()    
+        self.prev_err_timestamp = rospy.get_rostime()
+        self.curr_err_timestamp = rospy.get_rostime()
 
         # Odom
-        self.x_1 = 0
-        self.y_1 = 0
-        self.yaw_1 = 0
-
-        self.x_2 = 0
-        self.y_2 = 0
-        self.yaw_2 = 0
+        self.x = 0
+        self.y = 0
+        self.yaw = 0
 
         # Map
         self.map_width = map_width
@@ -147,97 +131,57 @@ class Maze():
         self.map_resolution = map_resolution
         self.map = Grid(map_width, map_height, map_resolution)
 
-        self.listener_1 = tf.TransformListener()
-        self.listener_2 = tf.TransformListener()
-        self.laser_msg_1 = None # update laser msg at callback
-        self.laser_msg_2 = None # update laser msg at callback
+        self.listener = tf.TransformListener()
+        self.laser_msg = None # update laser msg at callback
 
     '''Processing of odom message'''
-    def _odom_callback_1(self, msg):
+    def _odom_callback(self, msg):
         position = msg.pose.pose.position
-        self.x_1 = position.x
-        self.y_1 = position.y
+        self.x = position.x
+        self.y = position.y
 
         orientation = msg.pose.pose.orientation
         quaternion = [orientation.x, orientation.y, orientation.z, orientation.w]
-        self.yaw_1 = tf.transformations.euler_from_quaternion(quaternion)[2]
-
-    def _odom_callback_2(self, msg):
-        position = msg.pose.pose.position
-        self.x_2 = position.x
-        self.y_2 = position.y
-
-        orientation = msg.pose.pose.orientation
-        quaternion = [orientation.x, orientation.y, orientation.z, orientation.w]
-        self.yaw_2 = tf.transformations.euler_from_quaternion(quaternion)[2]
+        self.yaw = tf.transformations.euler_from_quaternion(quaternion)[2]
 
     '''
     Process laser message.
     Process only when the robot's state is WAITING_FOR_LASER
     Update previous and current errors and their timestamps
     '''
-    def _laser_callback_1(self, msg):
-        if self._fsm_1 == fsm.WAITING_FOR_LASER:
-            self.laser_msg_1 = msg
+    def _laser_callback(self, msg):
+        if self._fsm == fsm.WAITING_FOR_LASER:
+            self.laser_msg = msg
 
             # Get start and end index that corresponds to the robot's field of view
-            min_index = max(int(np.floor((self.scan_angle_1[0] - msg.angle_min) / msg.angle_increment)), 0)
-            max_index = min(int(np.ceil((self.scan_angle_1[1] - msg.angle_min) / msg.angle_increment)), len(msg.ranges)-1)
-            
+            min_index = max(int(np.floor((self.scan_angle[0] - msg.angle_min) / msg.angle_increment)), 0)
+            max_index = min(int(np.ceil((self.scan_angle[1] - msg.angle_min) / msg.angle_increment)), len(msg.ranges)-1)
+
             min_distance = np.min(msg.ranges[min_index:max_index+1]) # find closest distance to the right wall
-            
-            error = self.goal_distance_1 - min_distance # current error
+
+            error = self.goal_distance - min_distance # current error
             timestamp = rospy.get_rostime() # the time current error was computed
 
-            # if this is first error, set prev err and its timestamp to be same as the curr err so that d term would be zero 
-            if self.curr_err_1 is None:
-                self.prev_err_1 = error
-                self.prev_err_timestamp_1 = timestamp
-            
+            # if this is first error, set prev err and its timestamp to be same as the curr err so that d term would be zero
+            if self.curr_err is None:
+                self.prev_err = error
+                self.prev_err_timestamp = timestamp
+
             # if there is prev error, update prev err and its timestamp to more recent past
             else:
-                self.prev_err_1 = self.curr_err_1
-                self.prev_err_timestamp_1 = self.curr_err_timestamp_1
-            
+                self.prev_err = self.curr_err
+                self.prev_err_timestamp = self.curr_err_timestamp
+
             # update curr err and its timestamp
-            self.curr_err_1 = error
-            self.curr_err_timestamp_1 = timestamp
+            self.curr_err = error
+            self.curr_err_timestamp = timestamp
 
-            self._fsm_1 = fsm.MOVE # wait until the robot finishes its move before processing a new message
-
-    def _laser_callback_2(self, msg):
-        if self._fsm_2 == fsm.WAITING_FOR_LASER:
-            self.laser_msg_2 = msg
-
-            # Get start and end index that corresponds to the robot's field of view
-            min_index = max(int(np.floor((self.scan_angle_2[0] - msg.angle_min) / msg.angle_increment)), 0)
-            max_index = min(int(np.ceil((self.scan_angle_2[1] - msg.angle_min) / msg.angle_increment)), len(msg.ranges)-1)
-            
-            min_distance = np.min(msg.ranges[min_index:max_index+1]) # find closest distance to the right wall
-            
-            error = self.goal_distance_2 - min_distance # current error
-            timestamp = rospy.get_rostime() # the time current error was computed
-
-            # if this is first error, set prev err and its timestamp to be same as the curr err so that d term would be zero 
-            if self.curr_err_2 is None:
-                self.prev_err_2 = error
-                self.prev_err_timestamp_2 = timestamp
-            
-            # if there is prev error, update prev err and its timestamp to more recent past
-            else:
-                self.prev_err_2 = self.curr_err_2
-                self.prev_err_timestamp_2 = self.curr_err_timestamp_2
-            
-            # update curr err and its timestamp
-            self.curr_err_2 = error
-            self.curr_err_timestamp_2 = timestamp
-
-            self._fsm_2 = fsm.MOVE # wait until the robot finishes its move before processing a new message
+            self._fsm = fsm.MOVE # wait until the robot finishes its move before processing a new message
 
     '''Publish occupancy grid message'''
     def publish_map(self):
-        if self.laser_msg_1 != None:
-            msg = self.laser_msg_1
+        if self.laser_msg != None:
+            msg = self.laser_msg
 
             # update grid
             for i in range(len(msg.ranges)):
@@ -264,7 +208,7 @@ class Maze():
     '''Updates map in a direction defined by the angle and distance'''
     def update_map(self, angle, distance):
         # find transformation from base_link to odom
-        (trans, rot) = self.listener_1.lookupTransform('robot_0/odom', 'robot_0/base_laser_link', rospy.Time(0))
+        (trans, rot) = self.listener.lookupTransform('odom', 'base_laser_link', rospy.Time(0))
 
         angle += tf.transformations.euler_from_quaternion(rot)[2] # angle in odom reference
 
@@ -286,9 +230,9 @@ class Maze():
 
     Note that the algorithm iteslf works only when 0 < slope <= 1 and x1 <= x2 (we either move N or NE direction).
     If conditions don't meet, make following modifications.
-    
+
     if Case 1 (x1 == x2 or y1 == y2):
-        loop through points in x or y direction to trace horizontal/vertical line. 
+        loop through points in x or y direction to trace horizontal/vertical line.
     else:
         if Case 2 (x1 > x2):
             Consider (x2, y2) as start and (x1, y1) as end.
@@ -302,7 +246,7 @@ class Maze():
             Consider (y1, x1) as start and (y2, x2) as end.
             For each point (x, y) in line, update (y, x) instead.
 
-    Reference: https://medium.com/geekculture/bresenhams-line-drawing-algorithm-2e0e953901b3 
+    Reference: https://medium.com/geekculture/bresenhams-line-drawing-algorithm-2e0e953901b3
     '''
     def trace_line(self, x1, y1, x2, y2):
         # case 1: x1 == x2, loop through y coordinates
@@ -315,7 +259,7 @@ class Maze():
 
             self.map.update(x2, y2, 100)
             return
-        
+
         # case 1: x1 == x2, loop through x coordinates
         elif y1 == y2:
             x = x1
@@ -323,7 +267,7 @@ class Maze():
             while x != x2:
                 self.map.update(x, y1, 0)
                 x = x + np.sign(x2 - x1) * 1
-            
+
             self.map.update(x2, y2, 100)
             return
 
@@ -334,8 +278,8 @@ class Maze():
 
         # start and end points to use for the algorithm
         b_x1, b_y1, b_x2, b_y2 = x1, y1, x2, y2
- 
-        if x1_greater_than_x2: 
+
+        if x1_greater_than_x2:
             b_x1, b_y1, b_x2, b_y2 = b_x2, b_y2, b_x1, b_y1 # consider (x2, y2) as start and (x1, y1) as end
         if slope_is_negative:
             b_y1, b_y2 = self.map_height - b_y1, self.map_height - b_y2 # consider (x1, -y1) as start and (x2, -y2) as end
@@ -348,7 +292,7 @@ class Maze():
         d = 2 * dy - dx # decision parameter to move E or NE
         d_E = 2 * dy
         d_NE = 2 * (dy - dx)
-        
+
         x, y = b_x1, b_y1
 
         # move E or NE based on the decision parameter
@@ -369,7 +313,7 @@ class Maze():
                 reversed_y =  self.map_height - reversed_y # exchange the sign of y
             if 0 <= reversed_x < self.map_width and 0 <= reversed_y < self.map_height:
                 self.map.update(reversed_x, reversed_y, 0) # mark point between robot's position and obstacle as free space
-        
+
         self.map.update(x1, y1, 0) # mark robot's current position as free space
         self.map.update(x2, y2, 100) # mark obstacle's position as occupied
 
@@ -377,67 +321,87 @@ class Maze():
         rate = rospy.Rate(self.frequency) # loop at 10 Hz.
 
         while not rospy.is_shutdown(): # keep looping until user presses Ctrl+C
-            if self._fsm_1 == fsm.MOVE:
-                d_t = self.curr_err_timestamp_1.to_sec() - self.prev_err_timestamp_1.to_sec() # time elapsed between prev and curr error
-                rotation_angle = self.controller_1.step(self.prev_err_1, self.curr_err_1, d_t)
-                self.move_1(self.linear_velocity_1, rotation_angle)
+            if self._fsm == fsm.MOVE:
+                d_t = self.curr_err_timestamp.to_sec() - self.prev_err_timestamp.to_sec() # time elapsed between prev and curr error
+                rotation_angle = self.controller.step(self.prev_err, self.curr_err, d_t)
+                self.move(self.linear_velocity, rotation_angle)
                 self.publish_map()
-                self._fsm_1 = fsm.WAITING_FOR_LASER # don't move and wait until a new laser message has been processed
-        
-            if self._fsm_2 == fsm.MOVE:
-                d_t = self.curr_err_timestamp_2.to_sec() - self.prev_err_timestamp_2.to_sec() # time elapsed between prev and curr error
-                rotation_angle = self.controller_2.step(self.prev_err_2, self.curr_err_2, d_t)
-                self.move_2(self.linear_velocity_2, rotation_angle)
-                # self.publish_map()
-                self._fsm_2 = fsm.WAITING_FOR_LASER # don't move and wait until a new laser message has been processed
-        
+                self._fsm = fsm.WAITING_FOR_LASER # don't move and wait until a new laser message has been processed
         rate.sleep()
 
     '''Send a velocity command (linear vel in m/s, angular vel in rad/s).'''
-    def move_1(self, linear_vel, angular_vel):
+    def move(self, linear_vel, angular_vel):
         twist_msg = Twist()
         twist_msg.linear.x = linear_vel
         twist_msg.angular.z = angular_vel
-        self._cmd_pub_1.publish(twist_msg)
-
-    def move_2(self, linear_vel, angular_vel):
-        twist_msg = Twist()
-        twist_msg.linear.x = linear_vel
-        twist_msg.angular.z = angular_vel
-        self._cmd_pub_2.publish(twist_msg)
+        self._cmd_pub.publish(twist_msg)
 
     '''Stop the robot.'''
     def stop(self):
         twist_msg = Twist()
-        self._cmd_pub_1.publish(twist_msg)
-        self._fsm_1 = fsm.STOP
-        
-        self._cmd_pub_2.publish(twist_msg)
-        self._fsm_2 = fsm.STOP
+        self._cmd_pub.publish(twist_msg)
+        self._fsm = fsm.STOP
 
+def merger(master, grid1, grid2):
+    for x in range(grid1.width):
+        for y range(grid1.height):
+            if grid1.cell_at(x, y) == -1:
+                master.update(x, y, grid2.cell_at(x, y))
+            elif grid2.cell_at(x, y) == -1:
+                master.update(x, y, grid1.cell_at(x, y))
+            else:
+                avg = (grid1.cell_at(x, y) + grid2.cell_at(x, y))/2
+                master.update(x, y, avg)
 
 def main():
-    """Main function."""
+    # Main function.
+
     # 1st. initialization of node.
     rospy.init_node("follow_wall")
 
-    # Initialize controller 
-    controller = PD(K_P, K_D)
+    # Initialize controller
+    controller_1 = PD(K_P, K_D)
+    controller_2 = PD(K_P, K_D)
 
     # Initialization of the class for the random walk.
-    maze = Maze(controller)
+    robot_1 = Robot(controller_1,
+                    DEFAULT_CMD_VEL_TOPIC_1,
+                    DEFAULT_SCAN_TOPIC_1,
+                    DEFAULT_ODOM_1,
+                    1)
+
+    robot_2 = Robot(controller_2,
+                    DEFAULT_CMD_VEL_TOPIC_2,
+                    DEFAULT_SCAN_TOPIC_2,
+                    DEFAULT_ODOM_2,
+                    2)
+
+    master_map = Grid(MAP_WIDTH, MAP_HEIGHT, MAP_RESOLUTION)
+
+    '''
+    # can improve this
+    DEFAULT_CMD_VEL_TOPIC_1 = 'robot_0/cmd_vel'
+    DEFAULT_SCAN_TOPIC_1 = 'robot_0/base_scan'
+    DEFAULT_CMD_VEL_TOPIC_2 = 'robot_1/cmd_vel'
+    DEFAULT_SCAN_TOPIC_2 = 'robot_1/base_scan'
+    DEFAULT_ODOM_1 = 'robot_0/odom'
+    DEFAULT_ODOM_2 = 'robot_1/odom'
+    '''
 
     # Sleep for a few seconds to wait for the registration.
     rospy.sleep(2)
 
     # If interrupted, send a stop command before interrupting.
-    rospy.on_shutdown(maze.stop)
+    #rospy.on_shutdown(robot_1.stop)
 
     try:
-        maze.control()
+        robot_1.control()
+        robot_2.control()
+        merger(master_map, robot_1.grid, robot_2.grid)
 
     except rospy.ROSInterruptException:
         rospy.logerr("ROS node interrupted.")
+
 
 if __name__ == "__main__":
     """Run the main function."""
