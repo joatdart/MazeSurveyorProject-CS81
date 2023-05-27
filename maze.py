@@ -110,8 +110,9 @@ class Maze():
 
         self.linear_velocity_2 = linear_velocity
         self.angular_velocity_2 = angular_velocity
+
         self.scan_angle_2 = scan_angle
-        self.goal_distance_2 = goal_distance
+        self.goal_distance_2 = goal_distance + 0.3
 
         # Robot's state and controller
         self._fsm_1 = fsm.WAITING_FOR_LASER
@@ -213,6 +214,7 @@ class Maze():
             min_index = max(int(np.floor((self.scan_angle_2[0] - msg.angle_min) / msg.angle_increment)), 0)
             max_index = min(int(np.ceil((self.scan_angle_2[1] - msg.angle_min) / msg.angle_increment)), len(msg.ranges)-1)
             
+
             min_distance = np.min(msg.ranges[min_index:max_index+1]) # find closest distance to the right wall
             
             error = self.goal_distance_2 - min_distance # current error
@@ -387,7 +389,7 @@ class Maze():
             if self._fsm_2 == fsm.MOVE:
                 d_t = self.curr_err_timestamp_2.to_sec() - self.prev_err_timestamp_2.to_sec() # time elapsed between prev and curr error
                 rotation_angle = self.controller_2.step(self.prev_err_2, self.curr_err_2, d_t)
-                self.move_2(self.linear_velocity_2, rotation_angle)
+                self.move_2(self.linear_velocity_2,rotation_angle)
                 # self.publish_map()
                 self._fsm_2 = fsm.WAITING_FOR_LASER # don't move and wait until a new laser message has been processed
         
@@ -403,7 +405,7 @@ class Maze():
     def move_2(self, linear_vel, angular_vel):
         twist_msg = Twist()
         twist_msg.linear.x = linear_vel
-        twist_msg.angular.z = angular_vel
+        twist_msg.angular.z = -1 * angular_vel
         self._cmd_pub_2.publish(twist_msg)
 
     '''Stop the robot.'''
@@ -419,7 +421,7 @@ class Maze():
 def main():
     """Main function."""
     # 1st. initialization of node.
-    rospy.init_node("follow_wall")
+    rospy.init_node("detection_robots")
 
     # Initialize controller 
     controller = PD(K_P, K_D)

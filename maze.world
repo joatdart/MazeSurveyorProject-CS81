@@ -38,14 +38,28 @@ floorplan
 
 rosbot
 (
-  pose [ 29.25 -19.25 0.0 0.0 ]
+  pose [ 25.25 -10.25 0.0 270.0 ]
   name "rosbot1"
   color "green"
 )
 
 rosbot
 (
-  pose [ -19.25 29.25 0.0 0.0 ]
+  pose [ 25.25 -13.25 0.0 90.0 ]
   name "rosbot2"
   color "red"
+)
+
+actionbot
+(
+  pose [ -8.25 17.25 0.0 270.0 ]
+  name "actionbot1"
+  color "orange"
+)
+
+actionbot
+(
+  pose [ -9.25 20.25 0.0 180.0 ]
+  name "actionbot2"
+  color "blue"
 )
