@@ -35,7 +35,7 @@ define actionbot position
   localization "odom"
   odom_error [0.0 0.01 0.0 0.01 0.0 0.01]
 
-  size [ 1 1 0.2 ]
+  size [ .5 .5 0.2 ]
   origin [ 0.0 0.0 0.0 0.0 ]
   
   gui_nose 1
@@ -50,8 +50,8 @@ define actionbot position
   (
     points 4
     point[3] [0.45 1]
-    point[2] [1 0.55]
-    point[1] [1 0.45]
+    point[2] [1 1]
+    point[1] [1 0]
     point[0] [0.45 0]
     z [0 1]
   )

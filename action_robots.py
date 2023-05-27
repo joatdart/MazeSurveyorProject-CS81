@@ -2,7 +2,6 @@
 
 # testing for action collision
 
-import math
 import numpy as np
 import tf
 import rospy # module for ROS APIs
@@ -13,7 +12,7 @@ from sensor_msgs.msg import LaserScan # message type for scan
 from pid import PD 
 from grid import Grid, fsm
 import constants as cs
-
+from collections import deque
 
 class ActionRobots():
     def __init__(self,
@@ -31,7 +30,7 @@ class ActionRobots():
         self._cmd_pub_1 = rospy.Publisher(cs.DEFAULT_CMD_VEL_TOPIC_1, Twist, queue_size=1) # publisher to send velocity commands.
         self._cmd_pub_2 = rospy.Publisher(cs.DEFAULT_CMD_VEL_TOPIC_2, Twist, queue_size=1) # publisher to send velocity commands.
 
-        self._occupancy_grid_pub = rospy.Subscriber(cs.MAP_TOPIC, OccupancyGrid, queue_size=1) # subscribes to occupancy grid info
+        # self._occupancy_grid_pub = rospy.Subscriber(cs.MAP_TOPIC, OccupancyGrid, queue_size=1) # subscribes to occupancy grid info
         self._laser_sub_1 = rospy.Subscriber(cs.DEFAULT_SCAN_TOPIC_1, LaserScan, self._laser_callback_1, queue_size=1) # subscriber receiving messages from the laser.
         self._laser_sub_2 = rospy.Subscriber(cs.DEFAULT_SCAN_TOPIC_2, LaserScan, self._laser_callback_2, queue_size=1) # subscriber receiving messages from the laser.
 
@@ -89,6 +88,14 @@ class ActionRobots():
         self.listener_2 = tf.TransformListener()
         self.laser_msg_1 = None # update laser msg at callback
         self.laser_msg_2 = None # update laser msg at callback
+
+
+        # - Sample Input for action collision testing
+        self.path_1 = deque()
+        self.path_2 = deque()
+        self.object_locations_1 = []
+        self.object_locations_2 = []
+        
 
     '''Processing of odom message'''
     def _odom_callback_1(self, msg):
@@ -181,14 +188,12 @@ class ActionRobots():
                 d_t = self.curr_err_timestamp_1.to_sec() - self.prev_err_timestamp_1.to_sec() # time elapsed between prev and curr error
                 rotation_angle = self.controller_1.step(self.prev_err_1, self.curr_err_1, d_t)
                 self.move_1(self.linear_velocity_1, rotation_angle)
-                self.publish_map()
                 self._fsm_1 = fsm.WAITING_FOR_LASER # don't move and wait until a new laser message has been processed
         
             if self._fsm_2 == fsm.MOVE:
                 d_t = self.curr_err_timestamp_2.to_sec() - self.prev_err_timestamp_2.to_sec() # time elapsed between prev and curr error
                 rotation_angle = self.controller_2.step(self.prev_err_2, self.curr_err_2, d_t)
                 self.move_2(self.linear_velocity_2,rotation_angle)
-                # self.publish_map()
                 self._fsm_2 = fsm.WAITING_FOR_LASER # don't move and wait until a new laser message has been processed
         
         rate.sleep()

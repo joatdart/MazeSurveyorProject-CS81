@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+import math
+
 # Topics
 DEFAULT_CMD_VEL_TOPIC_1 = 'robot_2/cmd_vel'
 DEFAULT_SCAN_TOPIC_1 = 'robot_2/base_scan'

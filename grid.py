@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 from enum import Enum
+import numpy as np
 
 class Grid:
     def __init__(self, width, height, resolution):

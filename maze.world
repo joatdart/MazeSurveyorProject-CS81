@@ -52,7 +52,7 @@ rosbot
 
 actionbot
 (
-  pose [ -8.25 17.25 0.0 270.0 ]
+  pose [ -12 21.25 0.0 270.0 ]
   name "actionbot1"
   color "orange"
 )
