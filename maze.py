@@ -10,6 +10,7 @@ import rospy # module for ROS APIs
 from nav_msgs.msg import Odometry, OccupancyGrid
 from geometry_msgs.msg import Twist # message type for cmd_vel
 from sensor_msgs.msg import LaserScan # message type for scan
+import threading
 
 # Topics
 DEFAULT_CMD_VEL_TOPIC_1 = 'robot_0/cmd_vel'
@@ -395,8 +396,15 @@ def main():
     #rospy.on_shutdown(robot_1.stop)
 
     try:
-        robot_1.control()
-        robot_2.control()
+        thread1 = threading.Thread(target=robot_1.control())
+        thread2 = threading.Thread(target=robot_2.control())
+
+        thread1.start()
+        thread2.start()
+
+        thread1.join()
+        thread2.join()
+
         merger(master_map, robot_1.grid, robot_2.grid)
 
     except rospy.ROSInterruptException:
