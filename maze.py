@@ -13,12 +13,12 @@ from sensor_msgs.msg import LaserScan # message type for scan
 import threading
 
 # Topics
-DEFAULT_CMD_VEL_TOPIC_1 = 'robot_0/cmd_vel'
-DEFAULT_SCAN_TOPIC_1 = 'robot_0/base_scan'
-DEFAULT_CMD_VEL_TOPIC_2 = 'robot_1/cmd_vel'
-DEFAULT_SCAN_TOPIC_2 = 'robot_1/base_scan'
-DEFAULT_ODOM_1 = 'robot_0/odom'
-DEFAULT_ODOM_2 = 'robot_1/odom'
+DEFAULT_CMD_VEL_TOPIC_1 = '/robot_0/cmd_vel'
+DEFAULT_SCAN_TOPIC_1 = '/robot_0/base_scan'
+DEFAULT_CMD_VEL_TOPIC_2 = '/robot_1/cmd_vel'
+DEFAULT_SCAN_TOPIC_2 = '/robot_1/base_scan'
+DEFAULT_ODOM_1 = '/robot_0/odom'
+DEFAULT_ODOM_2 = '/robot_1/odom'
 # Frequency at which the loop operates
 FREQUENCY = 10 # Hz.
 
@@ -101,7 +101,11 @@ class Robot():
         self.frequency = frequency
         self.scan_angle = scan_angle
         self.goal_distance = goal_distance
-        self.map_pub_topic = str('map' + robot_num)
+        self.map_pub_topic = 'map' + str(robot_num)
+        
+        # store topic
+        self.odom_topic = odom_topic
+        self.scan_topic = scan_topic
 
         # Publisher/Subscriber
         self._cmd_pub = rospy.Publisher(cmd_vel_topic, Twist, queue_size=1) # publisher to send velocity commands.
@@ -209,7 +213,7 @@ class Robot():
     '''Updates map in a direction defined by the angle and distance'''
     def update_map(self, angle, distance):
         # find transformation from base_link to odom
-        (trans, rot) = self.listener.lookupTransform('odom', 'base_laser_link', rospy.Time(0))
+        (trans, rot) = self.listener.lookupTransform(self.odom_topic, self.scan_topic, rospy.Time(0))
 
         angle += tf.transformations.euler_from_quaternion(rot)[2] # angle in odom reference
 
@@ -345,7 +349,7 @@ class Robot():
 
 def merger(master, grid1, grid2):
     for x in range(grid1.width):
-        for y range(grid1.height):
+        for y in range(grid1.height):
             if grid1.cell_at(x, y) == -1:
                 master.update(x, y, grid2.cell_at(x, y))
             elif grid2.cell_at(x, y) == -1:
