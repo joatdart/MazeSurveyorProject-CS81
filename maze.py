@@ -10,6 +10,7 @@ import rospy # module for ROS APIs
 from nav_msgs.msg import Odometry, OccupancyGrid
 from geometry_msgs.msg import Twist # message type for cmd_vel
 from sensor_msgs.msg import LaserScan # message type for scan
+import constants as cs
 
 # Topics
 DEFAULT_CMD_VEL_TOPIC_1 = 'robot_0/cmd_vel'
@@ -86,6 +87,7 @@ class Maze():
                  angular_velocity=ANGULAR_VELOCITY,
                  frequency=FREQUENCY,
                  scan_angle=[MIN_SCAN_ANGLE_RAD, MAX_SCAN_ANGLE_RAD],
+                 scan_angle_front = [cs.MIN_SCAN_ANGLE_RAD_FRONT, cs.MAX_SCAN_ANGLE_RAD_FRONT],
                  map_width=MAP_WIDTH,
                  map_height=MAP_HEIGHT,
                  map_resolution=MAP_RESOLUTION):
@@ -113,6 +115,7 @@ class Maze():
 
         self.scan_angle_2 = scan_angle
         self.goal_distance_2 = goal_distance + 0.3
+        # self.goal_distance_2 = goal_distance
 
         # Robot's state and controller
         self._fsm_1 = fsm.WAITING_FOR_LASER
@@ -153,6 +156,35 @@ class Maze():
         self.laser_msg_1 = None # update laser msg at callback
         self.laser_msg_2 = None # update laser msg at callback
 
+
+        # Collision
+        self.avoid_pattern_1 = False
+        self.avoid_pattern_2 = False
+        self.scan_angle_front_1 = scan_angle_front
+        self.scan_angle_front_2 = scan_angle_front
+        self.curr_front_distance_1 = 0.0
+        self.curr_front_distance_2 = 0.0
+        self.prev_distance_front_1 = 0.0
+        self.prev_distance_front_2 = 0.0
+        self.prev_time_1 = rospy.get_time()
+        self.prev_time_2 = rospy.get_time()
+
+    # Checks scan velocity and if greater than expected then moving target
+    def moving_target(self, min_a, min_b, time_a, time_b, linear_velocity):
+        print "moving:"
+        print min_a
+        print min_b
+        print ((min_a - min_b) / (time_a - time_b))
+        print (((min_a - min_b) / (time_a - time_b)) % linear_velocity)
+        print np.round((((min_a - min_b) / (time_a - time_b)) % linear_velocity))
+        print "--"
+        return np.round((((min_a - min_b) / (time_a - time_b)) % linear_velocity)) > 0.01
+    # Logic to return the min distance in the angle range
+    def minimum_distance_from_range(self, scan_angle_min, scan_angle_max, msg):
+        min_index = max(int(np.floor((scan_angle_min - msg.angle_min) / msg.angle_increment)), 0)
+        max_index = min(int(np.ceil((scan_angle_max - msg.angle_min) / msg.angle_increment)), len(msg.ranges)-1)
+        return np.min(msg.ranges[min_index:max_index+1])
+    
     '''Processing of odom message'''
     def _odom_callback_1(self, msg):
         position = msg.pose.pose.position
@@ -189,6 +221,27 @@ class Maze():
             
             error = self.goal_distance_1 - min_distance # current error
             timestamp = rospy.get_rostime() # the time current error was computed
+            print "time"
+            print timestamp.to_sec()
+            time = rospy.get_time()
+            print "--"
+            print time
+            print self.prev_time_1
+            # Testing detection
+            self.curr_front_distance_1 = self.minimum_distance_from_range(self.scan_angle_front_1[0], self.scan_angle_front_1[1], msg)
+            # self.avoid_pattern_1 = self.moving_target(float(self.prev_distance_front_1), float(self.curr_front_distance_1), float(timestamp) ,float(self.prev_timestamp_1), float(self.linear_velocity_1))
+            if time != self.prev_time_1:
+                self.avoid_pattern_1 = self.moving_target(float(self.prev_distance_front_1), float(self.curr_front_distance_1), float(self.prev_time_1) ,float(time), float(self.linear_velocity_1))
+                print self.avoid_pattern_1
+                self.prev_distance_front_1 = self.curr_front_distance_1
+                if self.avoid_pattern_1 == True:
+                    print "Avoiding"
+                    print "start_distance"
+                    self.start_distance = self.curr_front_distance_1
+                    print self.start_distance
+                    self.stop()
+            self.prev_time_1 = time
+
 
             # if this is first error, set prev err and its timestamp to be same as the curr err so that d term would be zero 
             if self.curr_err_1 is None:

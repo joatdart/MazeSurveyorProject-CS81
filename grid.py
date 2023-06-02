@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# J. Hwang
+# CS 81 - grid starter code
 
 from enum import Enum
 import numpy as np
@@ -24,3 +26,11 @@ class fsm(Enum):
     COLLISION_DETECTED = 3
     AVOID_WITH_PID = 4
     AVOID_WITH_BACKTRACK = 5
+    AVOID_BASIC = 6
+    ROTATE_SQUARE_LEFT = 7
+    ROTATE_SQUARE_RIGHT = 8
+    MOVE_FORWARD = 9
+    ROTATE_CALC = 10
+    ROTATE = 11
+    STRAIGHT = 12
+    NEXT_AVOID = 13
