@@ -19,6 +19,10 @@ DEFAULT_CMD_VEL_TOPIC_2 = '/robot_1/cmd_vel'
 DEFAULT_SCAN_TOPIC_2 = '/robot_1/base_scan'
 DEFAULT_ODOM_1 = '/robot_0/odom'
 DEFAULT_ODOM_2 = '/robot_1/odom'
+LASER_LINK_1 = '/robot_0/base_laser_link'
+LASER_LINK_2 = '/robot_1/base_laser_link'
+
+
 # Frequency at which the loop operates
 FREQUENCY = 10 # Hz.
 
@@ -86,6 +90,7 @@ class Robot():
                  scan_topic,
                  odom_topic,
                  robot_num,
+                 laser_link,
                  goal_distance=GOAL_DISTANCE,
                  linear_velocity=LINEAR_VELOCITY,
                  angular_velocity=ANGULAR_VELOCITY,
@@ -102,10 +107,11 @@ class Robot():
         self.scan_angle = scan_angle
         self.goal_distance = goal_distance
         self.map_pub_topic = 'map' + str(robot_num)
-        
+
         # store topic
         self.odom_topic = odom_topic
         self.scan_topic = scan_topic
+        self.laser_link = laser_link
 
         # Publisher/Subscriber
         self._cmd_pub = rospy.Publisher(cmd_vel_topic, Twist, queue_size=1) # publisher to send velocity commands.
@@ -195,7 +201,7 @@ class Robot():
 
             # create and publish occupancy grid message
             occupancy_grid_msg = OccupancyGrid()
-            occupancy_grid_msg.header.frame_id = "map"
+            occupancy_grid_msg.header.frame_id = self.odom_topic
             occupancy_grid_msg.header.stamp = rospy.Time.now()
 
             occupancy_grid_msg.info.width = self.map_width
@@ -213,7 +219,7 @@ class Robot():
     '''Updates map in a direction defined by the angle and distance'''
     def update_map(self, angle, distance):
         # find transformation from base_link to odom
-        (trans, rot) = self.listener.lookupTransform(self.odom_topic, self.scan_topic, rospy.Time(0))
+        (trans, rot) = self.listener.lookupTransform(self.odom_topic, self.laser_link, rospy.Time(0))
 
         angle += tf.transformations.euler_from_quaternion(rot)[2] # angle in odom reference
 
@@ -325,13 +331,16 @@ class Robot():
     def control(self):
         rate = rospy.Rate(self.frequency) # loop at 10 Hz.
 
-        while not rospy.is_shutdown(): # keep looping until user presses Ctrl+C
-            if self._fsm == fsm.MOVE:
-                d_t = self.curr_err_timestamp.to_sec() - self.prev_err_timestamp.to_sec() # time elapsed between prev and curr error
-                rotation_angle = self.controller.step(self.prev_err, self.curr_err, d_t)
-                self.move(self.linear_velocity, rotation_angle)
-                self.publish_map()
-                self._fsm = fsm.WAITING_FOR_LASER # don't move and wait until a new laser message has been processed
+        while self._fsm == fsm.MOVE and not rospy.is_shutdown():
+            count = np.count_nonzero(self.map.grid == -1)
+            ratio = count/(self.map.width*self.map.height)
+            if ratio >= 0.9:
+                self._fsm = fsm.STOP
+            d_t = self.curr_err_timestamp.to_sec() - self.prev_err_timestamp.to_sec() # time elapsed between prev and curr error
+            rotation_angle = self.controller.step(self.prev_err, self.curr_err, d_t)
+            self.move(self.linear_velocity, rotation_angle)
+            self.publish_map()
+            self._fsm = fsm.WAITING_FOR_LASER # don't move and wait until a new laser message has been processed
         rate.sleep()
 
     '''Send a velocity command (linear vel in m/s, angular vel in rad/s).'''
@@ -360,6 +369,7 @@ def merger(master, grid1, grid2):
 
 def main():
     # Main function.
+    rospy.sleep(2)
 
     # 1st. initialization of node.
     rospy.init_node("follow_wall")
@@ -373,13 +383,15 @@ def main():
                     DEFAULT_CMD_VEL_TOPIC_1,
                     DEFAULT_SCAN_TOPIC_1,
                     DEFAULT_ODOM_1,
-                    1)
+                    1,
+                    LASER_LINK_1)
 
     robot_2 = Robot(controller_2,
                     DEFAULT_CMD_VEL_TOPIC_2,
                     DEFAULT_SCAN_TOPIC_2,
                     DEFAULT_ODOM_2,
-                    2)
+                    2,
+                    LASER_LINK_2)
 
     master_map = Grid(MAP_WIDTH, MAP_HEIGHT, MAP_RESOLUTION)
 
@@ -400,16 +412,14 @@ def main():
     #rospy.on_shutdown(robot_1.stop)
 
     try:
+        '''
         thread1 = threading.Thread(target=robot_1.control())
         thread2 = threading.Thread(target=robot_2.control())
+        '''
+        robot_1.control()
+        robot_2.control()
 
-        thread1.start()
-        thread2.start()
-
-        thread1.join()
-        thread2.join()
-
-        merger(master_map, robot_1.grid, robot_2.grid)
+        merger(master_map, robot_1.map.grid, robot_2.map.grid)
 
     except rospy.ROSInterruptException:
         rospy.logerr("ROS node interrupted.")
