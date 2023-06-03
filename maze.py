@@ -10,11 +10,15 @@ import rospy # module for ROS APIs
 from nav_msgs.msg import Odometry, OccupancyGrid
 from geometry_msgs.msg import Twist # message type for cmd_vel
 from sensor_msgs.msg import LaserScan # message type for scan
+import constants as cs
 
 # Topics
-DEFAULT_CMD_VEL_TOPIC = 'cmd_vel'
-DEFAULT_SCAN_TOPIC = 'base_scan'
-
+DEFAULT_CMD_VEL_TOPIC_1 = 'robot_0/cmd_vel'
+DEFAULT_SCAN_TOPIC_1 = 'robot_0/base_scan'
+DEFAULT_CMD_VEL_TOPIC_2 = 'robot_1/cmd_vel'
+DEFAULT_SCAN_TOPIC_2 = 'robot_1/base_scan'
+DEFAULT_ODOM_1 = 'robot_0/odom'
+DEFAULT_ODOM_2 = 'robot_1/odom'
 # Frequency at which the loop operates
 FREQUENCY = 10 # Hz.
 
@@ -83,39 +87,63 @@ class Maze():
                  angular_velocity=ANGULAR_VELOCITY,
                  frequency=FREQUENCY,
                  scan_angle=[MIN_SCAN_ANGLE_RAD, MAX_SCAN_ANGLE_RAD],
+                 scan_angle_front = [cs.MIN_SCAN_ANGLE_RAD_FRONT, cs.MAX_SCAN_ANGLE_RAD_FRONT],
                  map_width=MAP_WIDTH,
                  map_height=MAP_HEIGHT,
                  map_resolution=MAP_RESOLUTION):
 
         # Publisher/Subscriber
-        self._cmd_pub = rospy.Publisher(DEFAULT_CMD_VEL_TOPIC, Twist, queue_size=1) # publisher to send velocity commands.
+        self._cmd_pub_1 = rospy.Publisher(DEFAULT_CMD_VEL_TOPIC_1, Twist, queue_size=1) # publisher to send velocity commands.
+        self._cmd_pub_2 = rospy.Publisher(DEFAULT_CMD_VEL_TOPIC_2, Twist, queue_size=1) # publisher to send velocity commands.
+
         self._occupancy_grid_pub = rospy.Publisher('map', OccupancyGrid, queue_size=1) # publishes occupancy grid info
-        self._laser_sub = rospy.Subscriber(DEFAULT_SCAN_TOPIC, LaserScan, self._laser_callback, queue_size=1) # subscriber receiving messages from the laser.
-        self._odom_sub = rospy.Subscriber('odom', Odometry, self._odom_callback, queue_size=1)
+        self._laser_sub_1 = rospy.Subscriber(DEFAULT_SCAN_TOPIC_1, LaserScan, self._laser_callback_1, queue_size=1) # subscriber receiving messages from the laser.
+        self._laser_sub_2 = rospy.Subscriber(DEFAULT_SCAN_TOPIC_2, LaserScan, self._laser_callback_2, queue_size=1) # subscriber receiving messages from the laser.
+
+        self._odom_sub_1 = rospy.Subscriber(DEFAULT_ODOM_1, Odometry, self._odom_callback_1, queue_size=1)
+        self._odom_sub_2 = rospy.Subscriber(DEFAULT_ODOM_2, Odometry, self._odom_callback_2, queue_size=1)
 
         # Parameters
-        self.linear_velocity = linear_velocity
-        self.angular_velocity = angular_velocity
+        self.linear_velocity_1 = linear_velocity
+        self.angular_velocity_1 = angular_velocity
         self.frequency = frequency
-        self.scan_angle = scan_angle
-        self.goal_distance = goal_distance
+        self.scan_angle_1 = scan_angle
+        self.goal_distance_1 = goal_distance
+
+        self.linear_velocity_2 = linear_velocity
+        self.angular_velocity_2 = angular_velocity
+
+        self.scan_angle_2 = scan_angle
+        self.goal_distance_2 = goal_distance + 0.3
+        # self.goal_distance_2 = goal_distance
 
         # Robot's state and controller
-        self._fsm = fsm.WAITING_FOR_LASER
-        self.controller = controller 
-        
+        self._fsm_1 = fsm.WAITING_FOR_LASER
+        self.controller_1 = controller 
+
+        self._fsm_2 = fsm.WAITING_FOR_LASER
+        self.controller_2 = controller 
+
         # Previous and current errors (distance to the wall)
-        self.prev_err = None
-        self.curr_err = None
+        self.prev_err_1 = None
+        self.curr_err_1 = None
+        self.prev_err_2 = None
+        self.curr_err_2 = None
 
         # Keep track of the time when prev and curr errors were computed (used to get d_t for the d term in PD controller)
-        self.prev_err_timestamp = rospy.get_rostime()
-        self.curr_err_timestamp = rospy.get_rostime()
-        
+        self.prev_err_timestamp_1 = rospy.get_rostime()
+        self.curr_err_timestamp_1 = rospy.get_rostime()
+        self.prev_err_timestamp_2 = rospy.get_rostime()
+        self.curr_err_timestamp_2 = rospy.get_rostime()    
+
         # Odom
-        self.x = 0
-        self.y = 0
-        self.yaw = 0
+        self.x_1 = 0
+        self.y_1 = 0
+        self.yaw_1 = 0
+
+        self.x_2 = 0
+        self.y_2 = 0
+        self.yaw_2 = 0
 
         # Map
         self.map_width = map_width
@@ -123,57 +151,148 @@ class Maze():
         self.map_resolution = map_resolution
         self.map = Grid(map_width, map_height, map_resolution)
 
-        self.listener = tf.TransformListener()
-        self.laser_msg = None # update laser msg at callback
+        self.listener_1 = tf.TransformListener()
+        self.listener_2 = tf.TransformListener()
+        self.laser_msg_1 = None # update laser msg at callback
+        self.laser_msg_2 = None # update laser msg at callback
 
+
+        # Collision
+        self.avoid_pattern_1 = False
+        self.avoid_pattern_2 = False
+        self.scan_angle_front_1 = scan_angle_front
+        self.scan_angle_front_2 = scan_angle_front
+        self.curr_front_distance_1 = 0.0
+        self.curr_front_distance_2 = 0.0
+        self.prev_distance_front_1 = 0.0
+        self.prev_distance_front_2 = 0.0
+        self.prev_time_1 = rospy.get_time()
+        self.prev_time_2 = rospy.get_time()
+
+    # Checks scan velocity and if greater than expected then moving target
+    def moving_target(self, min_a, min_b, time_a, time_b, linear_velocity):
+        print "moving:"
+        print min_a
+        print min_b
+        print ((min_a - min_b) / (time_a - time_b))
+        print (((min_a - min_b) / (time_a - time_b)) % linear_velocity)
+        print np.round((((min_a - min_b) / (time_a - time_b)) % linear_velocity))
+        print "--"
+        return np.round((((min_a - min_b) / (time_a - time_b)) % linear_velocity)) > 0.01
+    # Logic to return the min distance in the angle range
+    def minimum_distance_from_range(self, scan_angle_min, scan_angle_max, msg):
+        min_index = max(int(np.floor((scan_angle_min - msg.angle_min) / msg.angle_increment)), 0)
+        max_index = min(int(np.ceil((scan_angle_max - msg.angle_min) / msg.angle_increment)), len(msg.ranges)-1)
+        return np.min(msg.ranges[min_index:max_index+1])
+    
     '''Processing of odom message'''
-    def _odom_callback(self, msg):
+    def _odom_callback_1(self, msg):
         position = msg.pose.pose.position
-        self.x = position.x
-        self.y = position.y
+        self.x_1 = position.x
+        self.y_1 = position.y
 
         orientation = msg.pose.pose.orientation
         quaternion = [orientation.x, orientation.y, orientation.z, orientation.w]
-        self.yaw = tf.transformations.euler_from_quaternion(quaternion)[2]
+        self.yaw_1 = tf.transformations.euler_from_quaternion(quaternion)[2]
+
+    def _odom_callback_2(self, msg):
+        position = msg.pose.pose.position
+        self.x_2 = position.x
+        self.y_2 = position.y
+
+        orientation = msg.pose.pose.orientation
+        quaternion = [orientation.x, orientation.y, orientation.z, orientation.w]
+        self.yaw_2 = tf.transformations.euler_from_quaternion(quaternion)[2]
 
     '''
     Process laser message.
     Process only when the robot's state is WAITING_FOR_LASER
     Update previous and current errors and their timestamps
     '''
-    def _laser_callback(self, msg):
-        if self._fsm == fsm.WAITING_FOR_LASER:
-            self.laser_msg = msg
+    def _laser_callback_1(self, msg):
+        if self._fsm_1 == fsm.WAITING_FOR_LASER:
+            self.laser_msg_1 = msg
 
             # Get start and end index that corresponds to the robot's field of view
-            min_index = max(int(np.floor((self.scan_angle[0] - msg.angle_min) / msg.angle_increment)), 0)
-            max_index = min(int(np.ceil((self.scan_angle[1] - msg.angle_min) / msg.angle_increment)), len(msg.ranges)-1)
+            min_index = max(int(np.floor((self.scan_angle_1[0] - msg.angle_min) / msg.angle_increment)), 0)
+            max_index = min(int(np.ceil((self.scan_angle_1[1] - msg.angle_min) / msg.angle_increment)), len(msg.ranges)-1)
             
             min_distance = np.min(msg.ranges[min_index:max_index+1]) # find closest distance to the right wall
             
-            error = self.goal_distance - min_distance # current error
+            error = self.goal_distance_1 - min_distance # current error
             timestamp = rospy.get_rostime() # the time current error was computed
+            print "time"
+            print timestamp.to_sec()
+            time = rospy.get_time()
+            print "--"
+            print time
+            print self.prev_time_1
+            # Testing detection
+            self.curr_front_distance_1 = self.minimum_distance_from_range(self.scan_angle_front_1[0], self.scan_angle_front_1[1], msg)
+            # self.avoid_pattern_1 = self.moving_target(float(self.prev_distance_front_1), float(self.curr_front_distance_1), float(timestamp) ,float(self.prev_timestamp_1), float(self.linear_velocity_1))
+            if time != self.prev_time_1:
+                self.avoid_pattern_1 = self.moving_target(float(self.prev_distance_front_1), float(self.curr_front_distance_1), float(self.prev_time_1) ,float(time), float(self.linear_velocity_1))
+                print self.avoid_pattern_1
+                self.prev_distance_front_1 = self.curr_front_distance_1
+                if self.avoid_pattern_1 == True:
+                    print "Avoiding"
+                    print "start_distance"
+                    self.start_distance = self.curr_front_distance_1
+                    print self.start_distance
+                    self.stop()
+            self.prev_time_1 = time
+
 
             # if this is first error, set prev err and its timestamp to be same as the curr err so that d term would be zero 
-            if self.curr_err is None:
-                self.prev_err = error
-                self.prev_err_timestamp = timestamp
+            if self.curr_err_1 is None:
+                self.prev_err_1 = error
+                self.prev_err_timestamp_1 = timestamp
             
             # if there is prev error, update prev err and its timestamp to more recent past
             else:
-                self.prev_err = self.curr_err
-                self.prev_err_timestamp = self.curr_err_timestamp
+                self.prev_err_1 = self.curr_err_1
+                self.prev_err_timestamp_1 = self.curr_err_timestamp_1
             
             # update curr err and its timestamp
-            self.curr_err = error
-            self.curr_err_timestamp = timestamp
+            self.curr_err_1 = error
+            self.curr_err_timestamp_1 = timestamp
 
-            self._fsm = fsm.MOVE # wait until the robot finishes its move before processing a new message
+            self._fsm_1 = fsm.MOVE # wait until the robot finishes its move before processing a new message
+
+    def _laser_callback_2(self, msg):
+        if self._fsm_2 == fsm.WAITING_FOR_LASER:
+            self.laser_msg_2 = msg
+
+            # Get start and end index that corresponds to the robot's field of view
+            min_index = max(int(np.floor((self.scan_angle_2[0] - msg.angle_min) / msg.angle_increment)), 0)
+            max_index = min(int(np.ceil((self.scan_angle_2[1] - msg.angle_min) / msg.angle_increment)), len(msg.ranges)-1)
+            
+
+            min_distance = np.min(msg.ranges[min_index:max_index+1]) # find closest distance to the right wall
+            
+            error = self.goal_distance_2 - min_distance # current error
+            timestamp = rospy.get_rostime() # the time current error was computed
+
+            # if this is first error, set prev err and its timestamp to be same as the curr err so that d term would be zero 
+            if self.curr_err_2 is None:
+                self.prev_err_2 = error
+                self.prev_err_timestamp_2 = timestamp
+            
+            # if there is prev error, update prev err and its timestamp to more recent past
+            else:
+                self.prev_err_2 = self.curr_err_2
+                self.prev_err_timestamp_2 = self.curr_err_timestamp_2
+            
+            # update curr err and its timestamp
+            self.curr_err_2 = error
+            self.curr_err_timestamp_2 = timestamp
+
+            self._fsm_2 = fsm.MOVE # wait until the robot finishes its move before processing a new message
 
     '''Publish occupancy grid message'''
     def publish_map(self):
-        if self.laser_msg != None:
-            msg = self.laser_msg
+        if self.laser_msg_1 != None:
+            msg = self.laser_msg_1
 
             # update grid
             for i in range(len(msg.ranges)):
@@ -200,7 +319,7 @@ class Maze():
     '''Updates map in a direction defined by the angle and distance'''
     def update_map(self, angle, distance):
         # find transformation from base_link to odom
-        (trans, rot) = self.listener.lookupTransform('odom', 'base_laser_link', rospy.Time(0))
+        (trans, rot) = self.listener_1.lookupTransform('robot_0/odom', 'robot_0/base_laser_link', rospy.Time(0))
 
         angle += tf.transformations.euler_from_quaternion(rot)[2] # angle in odom reference
 
@@ -313,31 +432,49 @@ class Maze():
         rate = rospy.Rate(self.frequency) # loop at 10 Hz.
 
         while not rospy.is_shutdown(): # keep looping until user presses Ctrl+C
-            if self._fsm == fsm.MOVE:
-                d_t = self.curr_err_timestamp.to_sec() - self.prev_err_timestamp.to_sec() # time elapsed between prev and curr error
-                rotation_angle = self.controller.step(self.prev_err, self.curr_err, d_t)
-                self.move(self.linear_velocity, rotation_angle)
+            if self._fsm_1 == fsm.MOVE:
+                d_t = self.curr_err_timestamp_1.to_sec() - self.prev_err_timestamp_1.to_sec() # time elapsed between prev and curr error
+                rotation_angle = self.controller_1.step(self.prev_err_1, self.curr_err_1, d_t)
+                self.move_1(self.linear_velocity_1, rotation_angle)
                 self.publish_map()
-                self._fsm = fsm.WAITING_FOR_LASER # don't move and wait until a new laser message has been processed
+                self._fsm_1 = fsm.WAITING_FOR_LASER # don't move and wait until a new laser message has been processed
+        
+            if self._fsm_2 == fsm.MOVE:
+                d_t = self.curr_err_timestamp_2.to_sec() - self.prev_err_timestamp_2.to_sec() # time elapsed between prev and curr error
+                rotation_angle = self.controller_2.step(self.prev_err_2, self.curr_err_2, d_t)
+                self.move_2(self.linear_velocity_2,rotation_angle)
+                # self.publish_map()
+                self._fsm_2 = fsm.WAITING_FOR_LASER # don't move and wait until a new laser message has been processed
+        
         rate.sleep()
 
     '''Send a velocity command (linear vel in m/s, angular vel in rad/s).'''
-    def move(self, linear_vel, angular_vel):
+    def move_1(self, linear_vel, angular_vel):
         twist_msg = Twist()
         twist_msg.linear.x = linear_vel
         twist_msg.angular.z = angular_vel
-        self._cmd_pub.publish(twist_msg)
+        self._cmd_pub_1.publish(twist_msg)
+
+    def move_2(self, linear_vel, angular_vel):
+        twist_msg = Twist()
+        twist_msg.linear.x = linear_vel
+        twist_msg.angular.z = -1 * angular_vel
+        self._cmd_pub_2.publish(twist_msg)
 
     '''Stop the robot.'''
     def stop(self):
         twist_msg = Twist()
-        self._cmd_pub.publish(twist_msg)
-        self._fsm = fsm.STOP
+        self._cmd_pub_1.publish(twist_msg)
+        self._fsm_1 = fsm.STOP
+        
+        self._cmd_pub_2.publish(twist_msg)
+        self._fsm_2 = fsm.STOP
+
 
 def main():
     """Main function."""
     # 1st. initialization of node.
-    rospy.init_node("follow_wall")
+    rospy.init_node("detection_robots")
 
     # Initialize controller 
     controller = PD(K_P, K_D)

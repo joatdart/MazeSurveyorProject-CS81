@@ -1,0 +1,65 @@
+include "lib/definition.inc"
+
+define floorplan model
+(
+  # sombre, sensible, artistic
+  color "gray30"
+
+  # most maps will need a bounding box
+  boundary 1
+
+  gui_nose 0
+  gui_grid 0
+  gui_outline 0
+  gripper_return 0
+  fiducial_return 0
+  laser_return 1
+)
+
+resolution 0.02
+interval_sim 100  # simulation timestep in milliseconds
+
+window
+(
+  size [ 600.0 700.0 ]
+  center [ 0.0 0.0 ]
+  rotate [ 0.0 0.0 ]
+  scale 60
+)
+
+floorplan
+(
+  name "maze"
+  bitmap "assets/maze2.png"
+  size [ 50.0 50.0 2.0 ]
+  pose [  5.0  5.0 0.0 0.0 ]
+)
+
+
+rosbot
+(
+  pose [ 25.25 -10.25 0.0 270.0 ]
+  name "rosbot1"
+  color "green"
+)
+
+rosbot
+(
+  pose [ 25.25 -13.25 0.0 90.0 ]
+  name "rosbot2"
+  color "red"
+)
+
+actionbot
+(
+  pose [ 7 28.25 0.0 180.0 ]
+  name "actionbot1"
+  color "orange"
+)
+
+actionbot
+(
+  pose [ -5.25 28.25 0.0 0.0 ]
+  name "actionbot2"
+  color "blue"
+)
