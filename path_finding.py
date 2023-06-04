@@ -51,12 +51,14 @@ class ThetaStarNode:
         self.map = None
 
         rospy.init_node('theta_star_node')
+       
+
         self._cmd_pub = rospy.Publisher('cmd_vel', Twist, queue_size=10)
         self._rate = rospy.Rate(10)  # 10 Hz
 
         self.sub = rospy.Subscriber('map', OccupancyGrid, self.occupancyGridCallback)
         self._laser_sub = rospy.Subscriber("/odom", Odometry, self.odom_callback)
-        
+        print "starting"
         # Wait for the occupancy grid to be received
         rospy.wait_for_message("map", OccupancyGrid)
 
@@ -166,6 +168,7 @@ class ThetaStarNode:
         costs = {}
         costs[start_cell] = 0
 
+        print "running tsp"
         while not open_list.empty():
             current_cell = open_list.get()
 
@@ -257,6 +260,7 @@ class ThetaStarNode:
                 closest_goal_pose = ThetaStarNode.findClosestGoalPose(self, self.current, self.goal_poses)
                 path = self.findThetaStarPath(self.current, closest_goal_pose)
                 for point in path:
+                    print (point.position.x," and ", point.position.y)
                     x = point.position.x
                     y = point.position.y
 
@@ -269,6 +273,19 @@ class ThetaStarNode:
                 self.goal_poses.remove(closest_goal_pose)
 
         self._rate.sleep()
+    
+    def getTS_Path(self):
+        result = []
+        if self.map is not None and self.current is not None and len(self.goal_poses) > 0:
+                
+            while self.goal_poses:
+                closest_goal_pose = ThetaStarNode.findClosestGoalPose(self, self.current, self.goal_poses)
+                path = self.findThetaStarPath(self.current, closest_goal_pose)
+                result.append(path)
+                self.goal_poses.remove(closest_goal_pose)
+
+        self._rate.sleep()
+        return result
 
 def main():
     goal_coordinates = [
@@ -279,8 +296,8 @@ def main():
     start_pose = (ROBOT_ORIGIN_X, ROBOT_ORIGIN_Y)
 
     node = ThetaStarNode(goal_coordinates, start_pose)
-    node.navigateToGoalPoses()
-
+    # node.navigateToGoalPoses()
+    print(node.getTS_Path())
 
 if __name__ == '__main__':
     try:

@@ -1,9 +1,12 @@
 #!/usr/bin/env python
 
-# testing for action collision
-# J. Hwang
+# Action Robot 
+# J. Hwang action robots 
+# A. Robang planning and movement
 # CS 81
+
 import numpy as np
+from path_finding import ThetaStarNode
 import tf
 import rospy # module for ROS APIs
 from nav_msgs.msg import Odometry, OccupancyGrid
@@ -14,6 +17,7 @@ from pid import PD
 from grid import Grid, fsm
 import constants as cs
 from collections import deque
+import math
 
 class ActionRobots():
     def __init__(self,
@@ -26,7 +30,15 @@ class ActionRobots():
                  scan_angle_front= [cs.MIN_SCAN_ANGLE_RAD_FRONT, cs.MAX_SCAN_ANGLE_RAD_FRONT],
                  map_width=cs.MAP_WIDTH,
                  map_height=cs.MAP_HEIGHT,
-                 map_resolution=cs.MAP_RESOLUTION):
+                 map_resolution=cs.MAP_RESOLUTION,
+                 goal_coordinates_1=cs.S_GOAL,
+                 goal_coordinates_2=cs.S_GOAL,
+                 exit_coordinates=cs.S_EXIT,
+                 entry_coordinates=cs.S_ENTRY,
+                 origin_x_1 = cs.ORIGIN_X_1,
+                 origin_y_1 = cs.ORIGIN_Y_1,
+                 origin_x_2 = cs.ORIGIN_X_2,
+                 origin_y_2 = cs.ORIGIN_Y_2):
 
         # Publisher/Subscriber
         self._cmd_pub_1 = rospy.Publisher(cs.DEFAULT_CMD_VEL_TOPIC_1, Twist, queue_size=1) # publisher to send velocity commands.
@@ -111,6 +123,30 @@ class ActionRobots():
         self.start_time = rospy.get_rostime()
         self.stop_distance = 1
         self.temp_curr_front_distance_1 = 0
+
+        #Assumptions
+        self.goal_coordinates_1 = goal_coordinates_1
+        self.goal_coordinates_2 = goal_coordinates_2
+        self.exit_coordinates = exit_coordinates
+        self.entry_coordinates = entry_coordinates
+
+        #Path Finding
+        self.robot_origin_x_1 = origin_x_1
+        self.robot_origin_y_1 = origin_y_1
+        self.robot_origin_x_2 = origin_x_2
+        self.robot_origin_y_2 = origin_y_2
+
+        ## INTEGRATION - PATH PLANNING ===============================
+        start_pose_1 = (self.robot_origin_x_1, self.robot_origin_y_1)
+        start_pose_2 = (self.robot_origin_x_2, self.robot_origin_y_2)
+        planner_1 = ThetaStarNode(self.goal_coordinates_1, start_pose_1)
+        planner_2 = ThetaStarNode(self.goal_coordinates_2, start_pose_2)
+
+        self.path_1 = planner_1.getTS_Path()
+        self.path_2 = planner_2.getTS_Path()
+
+        print self.path_1
+        
     '''Processing of odom message'''
     def _odom_callback_1(self, msg):
         position = msg.pose.pose.position
@@ -155,7 +191,6 @@ class ActionRobots():
         elif self._fsm_1 == fsm.MOVE_FORWARD:
     
             print "time"
-
             time = rospy.get_time()
             print "--"
             print time
@@ -169,7 +204,7 @@ class ActionRobots():
                     self.avoid_pattern_1 = self.moving_target(float(self.prev_distance_front_1), float(self.curr_front_distance_1), float(self.prev_time_1) ,float(time), float(self.linear_velocity_1))
                 self.prev_distance_front_1 = self.curr_front_distance_1
 
-                print self.avoid_pattern_1
+                print self.avoid_pattern_1 
                 print "front distance"
                 print self.curr_front_distance_1
                 if self.avoid_pattern_1 is True and self.curr_front_distance_1 < 1.7:
@@ -382,6 +417,67 @@ class ActionRobots():
         self.stop_1()
         self.stop_2()
 
+# PATH - MOTION 
+
+    def point_move(self, x, y, robot_num):
+        rate = rospy.Rate(self.frequency)
+        
+        # Calculate the angle and distance to the target point
+        dx = x - self.current.position.x
+        dy = y - self.current.position.y
+        theta = math.atan2(dy, dx)
+
+        target_distance = (dx ** 2 + dy ** 2) ** 0.5
+        target_angle = (theta - self.current.orientation.w) % (2 * math.pi)
+
+        angular_vel = math.pi/2
+        linear_vel = 0.2
+        # Rotate to face the target point
+        # counter-clockwise
+        if target_angle < math.pi:
+          duration = target_angle/angular_vel
+          if robot_num == 1:
+            self.sustained_move_1(0, angular_vel, duration)
+          else:
+            self.sustained_move_2(0, angular_vel, duration)
+
+
+        # clockwise
+        else:
+          target_angle = 2*math.pi - target_angle
+          duration = target_angle/angular_vel
+          if robot_num == 1:
+            self.sustained_move_1(0, -angular_vel, duration)
+          else:
+            self.sustained_move_2(0, -angular_vel, duration)
+
+        # Move forward to the target point
+        duration = target_distance/linear_vel
+        if robot_num == 1:
+            self.sustained_move_1(linear_vel, 0, duration)
+        else:
+            self.sustained_move_2(linear_vel, 0, duration)
+ 
+        rate.sleep()
+
+
+    def sustained_move_1(self, linear_vel, angular_vel, duration):
+        start_time = rospy.get_rostime()
+        while not rospy.is_shutdown():
+            self.move_1(linear_vel, angular_vel)
+
+            if rospy.get_rostime() - start_time >= rospy.Duration(duration):
+                break
+
+    def sustained_move_2(self, linear_vel, angular_vel, duration):
+        start_time = rospy.get_rostime()
+        while not rospy.is_shutdown():
+            self.move_2(linear_vel, angular_vel)
+
+            if rospy.get_rostime() - start_time >= rospy.Duration(duration):
+                break
+
+
 def main():
     """Main function."""
     # 1st. initialization of node.
@@ -390,16 +486,19 @@ def main():
     # Initialize controller 
     controller = PD(cs.K_P, cs.K_D)
 
-    # Initialization 
-    action_robots = ActionRobots(controller)
-
-    # Sleep for a few seconds to wait for the registration.
-    rospy.sleep(2)
-
-    # If interrupted, send a stop command before interrupting.
-    rospy.on_shutdown(action_robots.stop_all)
-
     try:
+
+        # Initialization 
+        action_robots = ActionRobots(controller)
+
+        # Sleep for a few seconds to wait for the registration.
+        rospy.sleep(2)
+
+        # If interrupted, send a stop command before interrupting.
+        rospy.on_shutdown(action_robots.stop_all)
+
+
+        # Motion for each robot
         action_robots.control()
 
     except rospy.ROSInterruptException:

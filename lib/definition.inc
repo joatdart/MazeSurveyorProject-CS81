@@ -44,7 +44,7 @@ define actionbot position
   obstacle_return 1    # Can hit things.
   laser_return 1
   
-  lidar(pose [ 0.0 0.0 0.0 0.0 ])
+  lidar(pose [ 0.0 0.0 0.1 0.0 ])
 
   block
   (

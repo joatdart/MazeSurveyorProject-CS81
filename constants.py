@@ -44,3 +44,18 @@ TRANSLATE_DISTANCE = 1 #m
 ROTATE_REL_VALUE = math.pi / 6
 ROTATE_ABS_VALUE = math.pi / 6
 COLLISION_DISTANCE = 1.6
+
+# Action Robot
+S_GOAL = [
+            (0.5, 0.5),
+            (1, 1)
+        ]
+
+S_EXIT = [0.35, 0.15]
+S_ENTRY = [0.35, 0.15]
+
+ORIGIN_X_1 = 2
+ORIGIN_Y_1 = 2
+
+ORIGIN_X_2 = 2
+ORIGIN_Y_2 = 1
