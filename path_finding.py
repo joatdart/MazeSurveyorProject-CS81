@@ -1,25 +1,26 @@
 #!/usr/bin/env python
-# path planning (traveling salesman problem)
 # written by: Andrea Robang
-# note: still editing/debugging!
+# path finding node for cs81 final project
 
 import rospy
-import math
 import numpy as np
-import tf
-
-
-from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import OccupancyGrid
-from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseStamped, Pose, Twist
+from nav_msgs.msg import Path
+from std_msgs.msg import Header
+import math
 from tf.transformations import euler_from_quaternion
+from nav_msgs.msg import Odometry
+from Queue import PriorityQueue
 
-import heapq
-
-ROBOT_ORIGIN_X = 5
-ROBOT_ORIGIN_Y = 5
+# Global variables
+# NOTED: EDIT AS NECESSARY
+ROBOT_ORIGIN_X = 2
+ROBOT_ORIGIN_Y = 2
 ROBOT_RADIUS = 4 # in # of cells
-
+FREQUENCY = 10
+MAX_ANGULAR_VEL = math.pi/2
+MAX_LINEAR_VEL = 0.2
 
 class Grid:
     def __init__(self, occupancy_grid_data, width, height, resolution):
@@ -40,135 +41,65 @@ class Grid:
 
         return inflated_obstacles
 
-class MazeTraverser:
-    def __init__(self):
-        
-        self.points = []  # List of points to visit
-        self.path = []  # The optimized path
-        self.map = None
+
+
+class ThetaStarNode:
+    def __init__(self, goal_coordinates, start):
+        self.goal_poses = [ThetaStarNode.createPose(self, x, y, 1) for (x, y) in goal_coordinates]
         self.current = (0, 0, 0)
+        self.start_pose = ThetaStarNode.createPose(self, start[0], start[1], 0)
+        self.map = None
 
-        self.sub = rospy.Subscriber("map", OccupancyGrid, self.map_callback, queue_size=1)
-        self.pose_pub = rospy.Publisher("pose", PoseStamped, queue_size=1)
+        rospy.init_node('theta_star_node')
+        self._cmd_pub = rospy.Publisher('cmd_vel', Twist, queue_size=10)
+        self._rate = rospy.Rate(10)  # 10 Hz
 
-        self._cmd_pub = rospy.Publisher("cmd_vel", Twist, queue_size=1)    
+        self.sub = rospy.Subscriber('map', OccupancyGrid, self.occupancyGridCallback)
         self._laser_sub = rospy.Subscriber("/odom", Odometry, self.odom_callback)
         
         # Wait for the occupancy grid to be received
-        print("waiting for occupancy")
         rospy.wait_for_message("map", OccupancyGrid)
-        # Wait a moment to let the map data propagate
-        rospy.sleep(0.1)
-        
-        print("init")
+
+        rospy.sleep(1)
+
+    def occupancyGridCallback(self, msg):
+        self.map = Grid(msg.data, msg.info.width, msg.info.height, msg.info.resolution)
 
     def odom_callback(self, msg):
-        # Extract the x and y coordinates from the Odometry message
         x = msg.pose.pose.position.x + ROBOT_ORIGIN_X
         y = msg.pose.pose.position.y + ROBOT_ORIGIN_Y
         theta = euler_from_quaternion([msg.pose.pose.orientation.x, msg.pose.pose.orientation.y, msg.pose.pose.orientation.z, msg.pose.pose.orientation.w])[2]
         
-        self.current = (x, y, theta)
+        self.current = self.createPose(x, y, theta)
 
-    def map_callback(self, msg):
-        self.map = Grid(msg.data, msg.info.width, msg.info.height, msg.info.resolution)
+    def createPose(self, x, y, w):
+        pose = Pose()
+        pose.position.x = x
+        pose.position.y = y
+        pose.position.z = 0.0
+        pose.orientation.x = 0.0
+        pose.orientation.y = 0.0
+        pose.orientation.z = 0.0
+        pose.orientation.w = w
+        return pose
 
-    def publish_pose(self, pose, i):
-        pose_msg = PoseStamped()
-        pose_msg.header.seq = i
-        pose_msg.header.stamp = rospy.Time.now()
-        pose_msg.header.frame_id = "map"
-        pose_msg.pose.position.x = pose[0]
-        pose_msg.pose.position.y = pose[1]
-        pose_msg.pose.position.z = 0.0
-        quaternion = tf.transformations.quaternion_from_euler(0, 0, pose[2])
-        pose_msg.pose.orientation.x = quaternion[0]
-        pose_msg.pose.orientation.y = quaternion[1]
-        pose_msg.pose.orientation.z = quaternion[2]
-        pose_msg.pose.orientation.w = quaternion[3]
-        
-        self.pose_pub.publish(pose_msg)
+    def calculatePoseEuclideanDistance(self, p1, p2):
+        return math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2)
 
-        return pose_msg
+    def findClosestGoalPose(self, start, goal_poses):
+        closest_distance = float('inf')
+        closest_pose = None
 
-    def calculate_distance(self, point1, point2):
-        # Calculate the Euclidean distance between two points
-        x1, y1 = self.get_coordinates(point1)
-        x2, y2 = self.get_coordinates(point2)
-        return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+        for goal_pose in goal_poses:
+            distance = ThetaStarNode.calculatePoseEuclideanDistance(self, start.position, goal_pose.position)
+            if distance < closest_distance:
+                closest_distance = distance
+                closest_pose = goal_pose
 
-    # Heuristic function (Euclidean distance from a point to the starting point)
-    def heuristic(self, start, point):
-        return MazeTraverser.calculate_distance(point, start)
-
-    def get_coordinates(self, point):
-
-        return point
-
-    def is_obstacle_between(point1, point2, occupancy_grid):
-        x1, y1 = point1
-        x2, y2 = point2
-
-        # Perform line-of-sight check using Bresenham's algorithm
-        dx = abs(x2 - x1)
-        dy = abs(y2 - y1)
-        sx = 1 if x1 < x2 else -1
-        sy = 1 if y1 < y2 else -1
-        err = dx - dy
-
-        while x1 != x2 or y1 != y2:
-            if occupancy_grid[y1][x1] == 1:
-                return True
-
-            e2 = 2 * err
-            if e2 > -dy:
-                err -= dy
-                x1 += sx
-            if e2 < dx:
-                err += dx
-                y1 += sy
-
-        return False
-
-    def solve_tsp(self, points, obstacles):
-        # Generate the maze graph (considering obstacles)
-        print("starting tsp")
-        n = len(points)
-        graph = {}
-        for i in range(n):
-            graph[i] = {}
-            for j in range(n):
-                if i != j:
-                    if not MazeTraverser.is_obstacle_between(points[i], points[j], self.map):
-                        graph[i][j] = MazeTraverser.distance(points[i], points[j])
-
-        start = points[0]
-        open_set = [(MazeTraverser.heuristic(start), 0, [0])]
-        closed_set = set()
-
-        while open_set:
-            _, cost, path = heapq.heappop(open_set)
-            current_point = path[-1]
-
-            if current_point in closed_set:
-                continue
-
-            if len(path) == n and current_point == 0:
-                return path
-
-            closed_set.add(current_point)
-
-            for neighbor, edge_cost in graph[current_point].items():
-                if neighbor not in closed_set:
-                    new_cost = cost + edge_cost
-                    new_path = path + [neighbor]
-                    heapq.heappush(open_set, (new_cost + MazeTraverser.heuristic(points[neighbor]), new_cost, new_path))
-
+        return closest_pose
+    
     def move(self, linear_vel, angular_vel):
-        """Send a velocity command (linear vel in m/s, angular vel in rad/s)."""
-        # Setting velocities.
         twist_msg = Twist()
-
         twist_msg.linear.x = linear_vel
         twist_msg.angular.z = angular_vel
         self._cmd_pub.publish(twist_msg)
@@ -180,17 +111,124 @@ class MazeTraverser:
 
             if rospy.get_rostime() - start_time >= rospy.Duration(duration):
                 break
+            
+    def reconstructPath(self, parents, goal_cell):
+        # Reconstruct the path from goal to start using the parents dictionary
+        path = []
+        current_cell = goal_cell
 
+        while current_cell is not None:
+            pose = self.cellToPose(current_cell)
+            path.append(pose)
+            current_cell = parents[current_cell]
+
+        path.reverse()
+        return path
+
+    def poseToCell(self, pose):
+        x = int(pose.position.x / self.map.resolution)
+        y = int(pose.position.y / self.map.resolution)
+        return (x, y)
+
+
+    def cellToPose(self, cell):
+        # Convert cell coordinates to pose coordinates
+        x = cell[0] * self.map.resolution
+        y = cell[1] * self.map.resolution
+        return ThetaStarNode.createPose(self, x, y, 1)
+
+    def calculateCellEuclideanDistance(self, node1, node2):
+        # Euclidean distance between two nodes
+        dx = node2[0] - node1[0]
+        dy = node2[1] - node1[1]
+        return math.sqrt(dx**2 + dy**2)
+
+    def is_in_priority_queue(self, pq, item):
+        for _, q_item in pq.queue:
+            if q_item == item:
+                return True
+        return False
+
+    def findThetaStarPath(self, start, goal):
+        start_cell = self.poseToCell(start)
+        goal_cell = self.poseToCell(goal)
+
+        # Initialize the open and closed lists
+        open_list = PriorityQueue()
+        open_list.put(start_cell)
+        closed_list = set()
+
+        # Create a dictionary to store the parent of each cell
+        parents = {}
+        parents[start_cell] = None
+
+        # Create a dictionary to store the cost to reach each cell
+        costs = {}
+        costs[start_cell] = 0
+
+        while not open_list.empty():
+            current_cell = open_list.get()
+
+            if current_cell == goal_cell:
+                # Path found, reconstruct it from the parents dictionary
+                path = self.reconstructPath(parents, current_cell)
+                return path
+
+            closed_list.add(current_cell)
+
+            neighbors = self.generateNeighbors(current_cell)
+            for neighbor_cell in neighbors:
+                if neighbor_cell in closed_list:
+                    continue
+
+                tentative_cost = costs[current_cell] + self.calculateCellEuclideanDistance(current_cell, neighbor_cell)
+
+                if not ThetaStarNode.is_in_priority_queue(self, open_list, neighbor_cell):
+                    open_list.put(neighbor_cell)
+
+                elif tentative_cost >= costs[neighbor_cell]:
+                    continue
+
+
+                parents[neighbor_cell] = current_cell
+                costs[neighbor_cell] = tentative_cost
+
+        # No path found
+        return None
+
+
+    def generateNeighbors(self, cell):
+        neighbors = []
+        x, y = cell[0], cell[1]
+
+        # Define the possible movement directions (4-connected)
+        directions = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)]
+
+        for dx, dy in directions:
+            neighbor_x, neighbor_y = x + dx, y + dy
+
+            if self.isValidCell(neighbor_x, neighbor_y) and not self.map.cell_at(neighbor_x, neighbor_y):
+                neighbors.append((neighbor_x, neighbor_y))
+        return neighbors
+
+
+    def isValidCell(self, x, y):
+        # Check if the given cell is within the map boundaries
+        map_width = self.map.grid.shape[1]
+        map_height = self.map.grid.shape[0]
+        return 0 <= x < map_width and 0 <= y < map_height
+
+    # NOTED: CAN REPLACE WITH YOUR OWN MOVEMENT FUNCTION (AND SUBSEQUENT FUNCTIONS USED E.G. MOVE, SUSTAINED_MOVE)
     def point_move(self, x, y):
-        rate = rospy.Rate(10)
+        rate = rospy.Rate(FREQUENCY)
         
         # Calculate the angle and distance to the target point
-        dx = x - self.current[0]
-        dy = y - self.current[1]
+        dx = x - self.current.position.x
+        dy = y - self.current.position.y
         theta = math.atan2(dy, dx)
 
         target_distance = (dx ** 2 + dy ** 2) ** 0.5
-        target_angle = (theta - self.current[2]) % (2 * math.pi)
+        target_angle = (theta - self.current.orientation.w) % (2 * math.pi)
 
         angular_vel = math.pi/2
         linear_vel = 0.2
@@ -212,40 +250,42 @@ class MazeTraverser:
             
         rate.sleep()
 
-    def navigate(self):
-        # publish poses in pose topic
-        for i, pose in enumerate(self.path):
-          self.publish_pose(pose, i)            
+    def navigateToGoalPoses(self):
+        if self.map is not None and self.current is not None and len(self.goal_poses) > 0:
+                
+            while self.goal_poses:
+                closest_goal_pose = ThetaStarNode.findClosestGoalPose(self, self.current, self.goal_poses)
+                path = self.findThetaStarPath(self.current, closest_goal_pose)
+                print(path)
+                for point in path:
+                    x = point.position.x
+                    y = point.position.y
 
-        # traverse path
-        for next in self.path:
-            # convert grid to world
-            point = self.map_to_world(next[0], next[1])
-            self.point_move(point[1], point[0])
+                    # NOTED: MOVEMENT FUNCTIONALITY, EDIT BASED ON COLLISION NODE
+                    ThetaStarNode.point_move(self, x, y)
 
-        self.pub.publish('Navigation complete.')
+                    # Wait for a short duration before sending the next command
+                    rospy.sleep(0.1)
+
+                self.goal_poses.remove(closest_goal_pose)
+
+        self._rate.sleep()
 
 def main():
+    goal_coordinates = [
+        (0.5, 0.9),
+        (1, 1)
+    ]
 
-    rospy.init_node('maze_traverser', anonymous=True)
+    start_pose = (ROBOT_ORIGIN_X, ROBOT_ORIGIN_Y)
 
-    rate = rospy.Rate(10)
-    traverser = MazeTraverser()
-    while not rospy.is_shutdown():
-        traverser.points = [(5,5),  (7,7), (6,6), (8,7), (4, 6)] 
-        if traverser.points:
-            # Replace with your own points
-            obstacles = [((1, 1), (2, 3)), ((3, 2), (9, 9))]  # Replace with obstacles in the maze
+    node = ThetaStarNode(goal_coordinates, start_pose)
+    node.navigateToGoalPoses()
 
-            traverser.path = MazeTraverser.solve_tsp(traverser.points, obstacles)
-            print("TSP Solution:", traverser.path)
-            traverser.navigate()
-            traverser.points = []
-    
-    rospy.sleep(2)
 
 if __name__ == '__main__':
     try:
         main()
     except rospy.ROSInterruptException:
         pass
+
