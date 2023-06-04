@@ -367,6 +367,28 @@ def merger(master, grid1, grid2):
                 avg = (grid1.cell_at(x, y) + grid2.cell_at(x, y))/2
                 master.update(x, y, avg)
 
+'''
+def publish_map(grid):
+
+    # create and publish occupancy grid message
+    occupancy_grid_msg = OccupancyGrid()
+    occupancy_grid_msg.header.frame_id = 'map'
+    occupancy_grid_msg.header.stamp = rospy.Time.now()
+
+    occupancy_grid_msg.info.width = MAP_WIDTH
+    occupancy_grid_msg.info.height = MAP_HEIGHT
+    occupancy_grid_msg.info.resolution = MAP_RESOLUTION
+
+    occupancy_grid_msg.info.origin.position.x = -(MAP_WIDTH/2) * MAP_RESOLUTION
+    occupancy_grid_msg.info.origin.position.y = -(MAP_HEIGHT/2) * MAP_RESOLUTION
+    occupancy_grid_msg.info.origin.orientation.w = 0
+
+    occupancy_grid_msg.data = grid.flatten()
+
+        self._occupancy_grid_pub.publish(occupancy_grid_msg)
+
+'''
+
 def main():
     # Main function.
     rospy.sleep(2)
@@ -395,6 +417,8 @@ def main():
 
     master_map = Grid(MAP_WIDTH, MAP_HEIGHT, MAP_RESOLUTION)
 
+
+
     '''
     # can improve this
     DEFAULT_CMD_VEL_TOPIC_1 = 'robot_0/cmd_vel'
@@ -419,7 +443,9 @@ def main():
         robot_1.control()
         robot_2.control()
 
-        merger(master_map, robot_1.map.grid, robot_2.map.grid)
+        merger(master_map, robot_1.map, robot_2.map)
+        robot_1.map = master_map
+        robot_1.publish_map()
 
     except rospy.ROSInterruptException:
         rospy.logerr("ROS node interrupted.")
